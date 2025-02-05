@@ -661,8 +661,12 @@ function N:new_layout()
       end
     end
   end
+  local tabline_offset = (vim.o.showtabline == 2 or
+        (vim.o.showtabline == 1 and #vim.api.nvim_list_tabpages() > 1))
+      and 1 or 0
+  local winbar_offset = 1
   layout.mark(1, vim.o.lines, true)
-  layout.mark(1, self.opts.margin.top + (vim.o.tabline == "" and 0 or 1), false)
+  layout.mark(1, self.opts.margin.top + tabline_offset + winbar_offset, false)
   layout.mark(vim.o.lines - (self.opts.margin.bottom + (vim.o.laststatus == 0 and 0 or 1)) + 1, vim.o.lines, false)
   return layout
 end
