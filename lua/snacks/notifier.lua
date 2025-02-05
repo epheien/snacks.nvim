@@ -381,7 +381,7 @@ function N:add(opts)
     notif.id = type(notif.replace) == "table" and notif.replace.id or notif.replace
   end
 
-  notif.title = (notif.title or ""):gsub("\n", " ")
+  notif.title = (notif.title or ""):gsub("\n", " ") .. string.format(' [%s]', vim.fn.strftime('%T'))
   notif.id = notif.id or next_id()
   notif.level = normlevel(notif.level)
   notif.icon = notif.icon or self.opts.icons[notif.level]
@@ -701,6 +701,7 @@ function N:layout()
           update[#update + 1] = notif.win
           notif.win.opts.row = notif.layout.top - 1
           notif.win.opts.col = vim.o.columns - notif.layout.width - self.opts.margin.right
+          notif.win.opts.title_pos = 'left'
           notif.shown = notif.shown or ts()
           notif.win:show()
         end
