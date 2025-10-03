@@ -19,7 +19,7 @@ local uv = vim.uv or vim.loop
 ---@field status? string
 
 local function norm(path)
-  return vim.fs.normalize(path)
+  return svim.fs.normalize(path)
 end
 
 ---@class snacks.picker.explorer.State
@@ -37,25 +37,23 @@ function State.new(picker)
     return v and not v.closed and v or nil
   end
 
+  Tree:refresh(picker:cwd())
+
   local buf = vim.api.nvim_win_get_buf(picker.main)
-  local buf_file = vim.fs.normalize(vim.api.nvim_buf_get_name(buf))
+  local buf_file = svim.fs.normalize(vim.api.nvim_buf_get_name(buf))
   if uv.fs_stat(buf_file) then
     Tree:open(buf_file)
   end
 
   if opts.watch then
-    picker.opts.on_close = function()
+    local on_close = picker.opts.on_close
+    picker.opts.on_close = function(p)
       require("snacks.explorer.watch").abort()
+      if on_close then
+        on_close(p)
+      end
     end
   end
-
-  picker.list.win:on("TermClose", function()
-    local p = ref()
-    if p then
-      Tree:refresh(p:cwd())
-      Actions.update(p)
-    end
-  end, { pattern = "*lazygit" })
 
   picker.list.win:on("BufWritePost", function(_, ev)
     local p = ref()
@@ -68,10 +66,30 @@ function State.new(picker)
   picker.list.win:on("DirChanged", function(_, ev)
     local p = ref()
     if p then
-      p:set_cwd(vim.fs.normalize(ev.file))
+      p:set_cwd(svim.fs.normalize(ev.file))
       p:find()
     end
   end)
+
+  if opts.diagnostics then
+    local dirty = false
+    local diag_update = Snacks.util.debounce(function()
+      dirty = false
+      local p = ref()
+      if p then
+        if require("snacks.explorer.diagnostics").update(p:cwd()) then
+          p.list:set_target()
+          p:find()
+        end
+      end
+    end, { ms = 200 })
+    picker.list.win:on({ "InsertLeave", "DiagnosticChanged" }, function(_, ev)
+      dirty = dirty or ev.event == "DiagnosticChanged"
+      if vim.fn.mode() == "n" and dirty then
+        diag_update()
+      end
+    end)
+  end
 
   -- schedule initial follow
   if opts.follow_file then
@@ -112,7 +130,7 @@ function State:setup(ctx)
   if opts.watch then
     require("snacks.explorer.watch").watch(ctx.filter.cwd)
   end
-  return #ctx.filter.pattern > 0
+  return not ctx.filter:is_empty()
 end
 
 ---@param opts snacks.picker.explorer.Config
@@ -129,7 +147,7 @@ function M.setup(opts)
       ---@param filter snacks.picker.Filter
       transform = function(picker, filter)
         ref = picker:ref()
-        local s = #filter.pattern > 0
+        local s = not filter:is_empty()
         if searching ~= s then
           searching = s
           filter.meta.searching = searching
@@ -152,6 +170,7 @@ function M.setup(opts)
             if parent.score == 0 or parent.match_tick ~= matcher.tick then
               parent.score = 1
               parent.match_tick = matcher.tick
+              parent.match_topk = nil
               picker.list:add(parent)
             else
               break
@@ -203,6 +222,7 @@ function M.explorer(opts, ctx)
 
   if opts.git_status then
     require("snacks.explorer.git").update(ctx.filter.cwd, {
+      untracked = opts.git_untracked,
       on_update = function()
         if ctx.picker.closed then
           return
@@ -211,6 +231,10 @@ function M.explorer(opts, ctx)
         ctx.picker:find()
       end,
     })
+  end
+
+  if opts.diagnostics then
+    require("snacks.explorer.diagnostics").update(ctx.filter.cwd)
   end
 
   return function(cb)
@@ -222,17 +246,24 @@ function M.explorer(opts, ctx)
     local top = Tree:find(ctx.filter.cwd)
     local last = {} ---@type table<snacks.picker.explorer.Node, snacks.picker.explorer.Item>
     Tree:get(ctx.filter.cwd, function(node)
+      local parent = node.parent and items[node.parent.path] or nil
+      local status = node.status
+      if not status and parent and parent.dir_status then
+        status = parent.dir_status
+      end
       local item = {
         file = node.path,
         dir = node.dir,
         open = node.open,
+        dir_status = node.dir_status or parent and parent.dir_status,
         text = node.path,
-        parent = node.parent and items[node.parent.path] or nil,
+        parent = parent,
         hidden = node.hidden,
         ignored = node.ignored,
-        status = (not node.dir or not node.open or opts.git_status_open) and node.status or nil,
+        status = (not node.dir or not node.open or opts.git_status_open) and status or nil,
         last = true,
         type = node.type,
+        severity = (not node.dir or not node.open or opts.diagnostics_open) and node.severity or nil,
       }
       if last[node.parent] then
         last[node.parent].last = false
@@ -244,7 +275,7 @@ function M.explorer(opts, ctx)
       end
       items[node.path] = item
       cb(item)
-    end, { hidden = opts.hidden, ignored = opts.ignored })
+    end, { hidden = opts.hidden, ignored = opts.ignored, exclude = opts.exclude, include = opts.include })
   end
 end
 
@@ -260,7 +291,6 @@ function M.search(opts, ctx)
     "d", -- include directories
     "--path-separator", -- same everywhere
     "/",
-    "--follow", -- always needed to make sure we see symlinked dirs as dirs
   }
   opts.dirs = { ctx.filter.cwd }
   ctx.picker.list:set_target()
@@ -296,12 +326,12 @@ function M.search(opts, ctx)
       else
         item.sort = parent.sort .. "#" .. basename .. " "
       end
-      if basename:sub(1, 1) == "." then
-        item.hidden = true
-      end
+      item.hidden = basename:sub(1, 1) == "."
       item.text = item.text:sub(1, #opts.cwd) == opts.cwd and item.text:sub(#opts.cwd + 2) or item.text
-      local node = Tree:find(item.file)
+      local node = Tree:node(item.file)
       if node then
+        item.dir = node.dir
+        item.type = node.type
         item.status = (not node.dir or opts.git_status_open) and node.status or nil
       end
 
@@ -339,7 +369,9 @@ function M.search(opts, ctx)
 
       -- Add parents when needed
       for dir in Snacks.picker.util.parents(item.file, opts.cwd) do
-        if not dirs[dir] then
+        if dirs[dir] then
+          break
+        else
           dirs[dir] = {
             text = dir,
             file = dir,

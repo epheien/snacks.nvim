@@ -2,7 +2,8 @@
 ---@field path string
 ---@field name string
 ---@field hidden? boolean
----@field status? string
+---@field status? string merged git status
+---@field dir_status? string git status of the directory
 ---@field ignored? boolean
 ---@field type "file"|"directory"|"link"|"fifo"|"socket"|"char"|"block"|"unknown"
 ---@field dir? boolean
@@ -12,11 +13,20 @@
 ---@field last? boolean child of the parent
 ---@field utime? number
 ---@field children table<string, snacks.picker.explorer.Node>
+---@field severity? number
+
+---@class snacks.picker.explorer.Filter
+---@field hidden? boolean show hidden files
+---@field ignored? boolean show ignored files
+---@field exclude? string[] globs to exclude
+---@field include? string[] globs to exclude
+
+---@alias snacks.picker.explorer.Snapshot {fields: string[], state:table<snacks.picker.explorer.Node, any[]>}
 
 local uv = vim.uv or vim.loop
 
 local function norm(path)
-  return vim.fs.normalize(path)
+  return svim.fs.normalize(path)
 end
 
 local function assert_dir(path)
@@ -115,6 +125,7 @@ function Tree:close(path)
   local dir = self:dir(path)
   local node = self:find(dir)
   node.open = false
+  node.expanded = false -- clear expanded state
 end
 
 ---@param node snacks.picker.explorer.Node
@@ -130,6 +141,7 @@ function Tree:expand(node)
     if not name then
       break
     end
+    t = t or Snacks.util.path_type(node.path .. "/" .. name)
     found[name] = true
     local child = self:child(node, name, t)
     child.type = t
@@ -193,19 +205,40 @@ function Tree:walk(node, fn, opts)
   return false
 end
 
+---@param filter snacks.picker.explorer.Filter
+function Tree:filter(filter)
+  local exclude = filter.exclude and #filter.exclude > 0 and Snacks.picker.util.globber(filter.exclude)
+  local include = filter.include and #filter.include > 0 and Snacks.picker.util.globber(filter.include)
+  return function(node)
+    -- takes precedence over all other filters
+    if include and include(node.path) then
+      return true
+    end
+    if node.hidden and not filter.hidden then
+      return false
+    end
+    if node.ignored and not filter.ignored then
+      return false
+    end
+    if exclude and exclude(node.path) then
+      return false
+    end
+    return true
+  end
+end
+
 ---@param cwd string
 ---@param cb fun(node: snacks.picker.explorer.Node)
----@param opts? {hidden?: boolean, ignored?: boolean, expand?: boolean}
+---@param opts? {expand?: boolean}|snacks.picker.explorer.Filter
 function Tree:get(cwd, cb, opts)
   opts = opts or {}
   assert_dir(cwd)
   local node = self:find(cwd)
   node.open = true
+  local filter = self:filter(opts)
   self:walk(node, function(n)
     if n ~= node then
-      if n.hidden and not opts.hidden then
-        return false
-      elseif n.ignored and not opts.ignored then
+      if not filter(n) then
         return false
       end
     end
@@ -217,15 +250,18 @@ function Tree:get(cwd, cb, opts)
 end
 
 ---@param cwd string
----@param opts? {hidden?: boolean, ignored?: boolean}
+---@param opts? snacks.picker.explorer.Filter
 function Tree:is_dirty(cwd, opts)
   opts = opts or {}
+  if require("snacks.explorer.git").is_dirty(cwd) then
+    return true
+  end
   local dirty = false
   self:get(cwd, function(n)
     if n.dir and n.open and not n.expanded then
       dirty = true
     end
-  end, { hidden = opts.hidden, ignored = opts.ignored, expand = false })
+  end, { hidden = opts.hidden, ignored = opts.ignored, exclude = opts.exclude, include = opts.include, expand = false })
   return dirty
 end
 
@@ -264,6 +300,76 @@ function Tree:close_all(cwd)
   self:walk(self:find(cwd), function(node)
     node.open = false
   end, { all = true })
+end
+
+---@param cwd string
+---@param filter fun(node: snacks.picker.explorer.Node):boolean?
+---@param opts? {up?: boolean, path?: string}
+function Tree:next(cwd, filter, opts)
+  opts = opts or {}
+  local path = opts.path or cwd
+  local root = self:node(cwd) or nil
+  if not root then
+    return
+  end
+  local first ---@type snacks.picker.explorer.Node?
+  local last ---@type snacks.picker.explorer.Node?
+  local prev ---@type snacks.picker.explorer.Node?
+  local next ---@type snacks.picker.explorer.Node?
+  local found = false
+  self:walk(root, function(node)
+    local want = not node.dir and filter(node) and not node.ignored
+    if node.path == path then
+      found = true
+    end
+    if want then
+      first, last = first or node, node
+      next = next or (found and node.path ~= path and node) or nil
+      prev = not found and node or prev
+    end
+  end, { all = true })
+  if opts.up then
+    return prev or last
+  end
+  return next or first
+end
+
+---@param node snacks.picker.explorer.Node
+---@param snapshot snacks.picker.explorer.Snapshot
+function Tree:changed(node, snapshot)
+  local old = snapshot.state
+  local current = self:snapshot(node, snapshot.fields).state
+  if vim.tbl_count(current) ~= vim.tbl_count(old) then
+    return true
+  end
+  for n, data in pairs(current) do
+    local prev = old[n]
+    if not prev then
+      return true
+    end
+    if not vim.deep_equal(prev, data) then
+      return true
+    end
+  end
+  return false
+end
+
+---@param node snacks.picker.explorer.Node
+---@param fields string[]
+function Tree:snapshot(node, fields)
+  ---@type snacks.picker.explorer.Snapshot
+  local ret = {
+    state = {},
+    fields = fields,
+  }
+  Tree:walk(node, function(n)
+    local data = {} ---@type any[]
+    for f, field in ipairs(fields) do
+      data[f] = n[field]
+    end
+    ret.state[n] = data
+  end, { all = true })
+  return ret
 end
 
 return Tree.new()

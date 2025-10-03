@@ -1,6 +1,10 @@
 local Git = require("snacks.explorer.git")
 local Tree = require("snacks.explorer.tree")
 
+---@class snacks.explorer.diagnostic.Action: snacks.picker.Action
+---@field severity? number
+---@field up? boolean
+
 local uv = vim.uv or vim.loop
 
 local M = {}
@@ -8,6 +12,9 @@ local M = {}
 ---@param picker snacks.Picker
 ---@param path string
 function M.reveal(picker, path)
+  if picker.closed then
+    return
+  end
   for item, idx in picker:iter() do
     if item.file == path then
       picker.list:view(idx)
@@ -19,8 +26,8 @@ end
 ---@param prompt string
 ---@param fn fun()
 function M.confirm(prompt, fn)
-  Snacks.picker.select({ "Yes", "No" }, { prompt = prompt }, function(_, idx)
-    if idx == 1 then
+  Snacks.picker.select({ "No", "Yes" }, { prompt = prompt }, function(_, idx)
+    if idx == 2 then
       fn()
     end
   end)
@@ -78,12 +85,18 @@ function M.actions.explorer_open(_, item)
   end
 end
 
-function M.actions.explorer_yank(_, item)
-  if not item then
-    return
+function M.actions.explorer_yank(picker)
+  local files = {} ---@type string[]
+  if vim.fn.mode():find("^[vV]") then
+    picker.list:select()
   end
-  vim.fn.setreg("+", item.file)
-  Snacks.notify.info("Yanked `" .. item.file .. "`")
+  for _, item in ipairs(picker:selected({ fallback = true })) do
+    table.insert(files, Snacks.picker.util.path(item))
+  end
+  picker.list:set_selected() -- clear selection
+  local value = table.concat(files, "\n")
+  vim.fn.setreg(vim.v.register or "+", value, "l")
+  Snacks.notify.info("Yanked " .. #files .. " files")
 end
 
 function M.actions.explorer_up(picker)
@@ -120,6 +133,22 @@ function M.actions.explorer_git_next(picker, item)
   end
 end
 
+function M.actions.explorer_paste(picker)
+  local files = vim.split(vim.fn.getreg(vim.v.register or "+") or "", "\n", { plain = true })
+  files = vim.tbl_filter(function(file)
+    return file ~= "" and vim.fn.filereadable(file) == 1
+  end, files)
+
+  if #files == 0 then
+    return Snacks.notify.warn(("The `%s` register does not contain any files"):format(vim.v.register or "+"))
+  end
+  local dir = picker:dir()
+  Snacks.picker.util.copy(files, dir)
+  Tree:refresh(dir)
+  Tree:open(dir)
+  M.update(picker, { target = dir })
+end
+
 function M.actions.explorer_git_prev(picker, item)
   local node = Git.next(picker:cwd(), item and item.file, true)
   if node then
@@ -134,7 +163,7 @@ function M.actions.explorer_add(picker)
     if not value or value:find("^%s$") then
       return
     end
-    local path = vim.fs.normalize(picker:dir() .. "/" .. value)
+    local path = svim.fs.normalize(picker:dir() .. "/" .. value)
     local is_file = value:sub(-1) ~= "/"
     local dir = is_file and vim.fs.dirname(path) or path
     if is_file and uv.fs_stat(path) then
@@ -156,7 +185,7 @@ function M.actions.explorer_rename(picker, item)
     return
   end
   Snacks.rename.rename_file({
-    file = item.file,
+    from = item.file,
     on_rename = function(new, old)
       Tree:refresh(vim.fs.dirname(old))
       Tree:refresh(vim.fs.dirname(new))
@@ -179,12 +208,7 @@ function M.actions.explorer_move(picker)
   M.confirm("Move " .. what .. " to " .. t .. "?", function()
     for _, from in ipairs(paths) do
       local to = target .. "/" .. vim.fn.fnamemodify(from, ":t")
-      Snacks.rename.on_rename_file(from, to, function()
-        local ok, err = pcall(vim.fn.rename, from, to)
-        if not ok then
-          Snacks.notify.error("Failed to move `" .. from .. "`:\n- " .. err)
-        end
-      end)
+      Snacks.rename.rename_file({ from = from, to = to })
       Tree:refresh(vim.fs.dirname(from))
     end
     Tree:refresh(target)
@@ -216,7 +240,7 @@ function M.actions.explorer_copy(picker, item)
       return
     end
     local dir = vim.fs.dirname(item.file)
-    local to = vim.fs.normalize(dir .. "/" .. value)
+    local to = svim.fs.normalize(dir .. "/" .. value)
     if uv.fs_stat(to) then
       Snacks.notify.warn("File already exists:\n- `" .. to .. "`")
       return
@@ -237,7 +261,9 @@ function M.actions.explorer_del(picker)
   M.confirm("Delete " .. what .. "?", function()
     for _, path in ipairs(paths) do
       local ok, err = pcall(vim.fn.delete, path, "rf")
-      if not ok then
+      if ok then
+        Snacks.bufdelete({ file = path, force = true })
+      else
         Snacks.notify.error("Failed to delete `" .. path .. "`:\n- " .. err)
       end
       Tree:refresh(vim.fs.dirname(path))
@@ -259,5 +285,25 @@ function M.actions.confirm(picker, item, action)
     Snacks.picker.actions.jump(picker, item, action)
   end
 end
+
+function M.actions.explorer_diagnostic(picker, item, action)
+  ---@cast action snacks.explorer.diagnostic.Action
+  local node = Tree:next(picker:cwd(), function(node)
+    if not node.severity then
+      return false
+    end
+    return action.severity == nil or node.severity == action.severity
+  end, { up = action.up, path = item and item.file })
+  if node then
+    M.update(picker, { target = node.path })
+  end
+end
+
+M.actions.explorer_diagnostic_next = { action = "explorer_diagnostic" }
+M.actions.explorer_diagnostic_prev = { action = "explorer_diagnostic", up = true }
+M.actions.explorer_warn_next = { action = "explorer_diagnostic", severity = vim.diagnostic.severity.WARN }
+M.actions.explorer_warn_prev = { action = "explorer_diagnostic", severity = vim.diagnostic.severity.WARN, up = true }
+M.actions.explorer_error_next = { action = "explorer_diagnostic", severity = vim.diagnostic.severity.ERROR }
+M.actions.explorer_error_prev = { action = "explorer_diagnostic", severity = vim.diagnostic.severity.ERROR, up = true }
 
 return M

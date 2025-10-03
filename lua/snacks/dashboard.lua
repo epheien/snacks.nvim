@@ -240,6 +240,7 @@ function D:init()
   vim.o.ei = "all"
   Snacks.util.wo(self.win, Snacks.config.styles.dashboard.wo)
   Snacks.util.bo(self.buf, Snacks.config.styles.dashboard.bo)
+  vim.b[self.buf].snacks_main = true
   vim.o.ei = ""
   if self:is_float() then
     vim.keymap.set("n", "<esc>", "<cmd>bd<cr>", { silent = true, buffer = self.buf })
@@ -254,7 +255,7 @@ function D:init()
       end
     end,
   })
-  vim.api.nvim_create_autocmd("BufWipeout", {
+  vim.api.nvim_create_autocmd({ "BufWipeout", "BufDelete" }, {
     buffer = self.buf,
     callback = function()
       self.fire("Closed")
@@ -696,6 +697,9 @@ function D:keys()
 end
 
 function D:update()
+  if not (self.buf and vim.api.nvim_buf_is_valid(self.buf)) then
+    return
+  end
   self.fire("UpdatePre")
   self._size = self:size()
 
@@ -738,18 +742,8 @@ end
 ---@param cat? string
 ---@return snacks.dashboard.Text
 function M.icon(name, cat)
-  -- stylua: ignore
-  local try = {
-    function() return require("mini.icons").get(cat or "file", name) end,
-    function() return require("nvim-web-devicons").get_icon(name) end,
-  }
-  for _, fn in ipairs(try) do
-    local ok, icon, hl = pcall(fn)
-    if ok then
-      return { icon, hl = hl, width = 2 }
-    end
-  end
-  return { " ", hl = "icon", width = 2 }
+  local icon, hl = Snacks.util.icon(name, cat)
+  return { icon or " ", hl = hl or "icon", width = 2 }
 end
 
 -- Used by the default preset to pick something
@@ -798,13 +792,14 @@ function M.oldfiles(opts)
 
   local filter = {} ---@type {path:string, want:boolean}[]
   for path, want in pairs(opts.filter or {}) do
-    table.insert(filter, { path = vim.fs.normalize(path), want = want })
+    table.insert(filter, { path = svim.fs.normalize(path), want = want })
   end
   local done = {} ---@type table<string, boolean>
   local i = 1
+  local oldfiles = vim.v.oldfiles
   return function()
-    while vim.v.oldfiles[i] do
-      local file = vim.fs.normalize(vim.v.oldfiles[i], { _fast = true, expand_env = false })
+    while oldfiles[i] do
+      local file = svim.fs.normalize(oldfiles[i], { _fast = true, expand_env = false })
       local want = not done[file]
       if want then
         done[file] = true
@@ -855,14 +850,14 @@ function M.sections.recent_files(opts)
   return function()
     opts = opts or {}
     local limit = opts.limit or 5
-    local root = opts.cwd and vim.fs.normalize(opts.cwd == true and vim.fn.getcwd() or opts.cwd) or ""
+    local root = opts.cwd and svim.fs.normalize(opts.cwd == true and vim.fn.getcwd() or opts.cwd) or ""
     local ret = {} ---@type snacks.dashboard.Section
     for file in M.oldfiles({ filter = { [root] = true } }) do
       if not opts.filter or opts.filter(file) then
         ret[#ret + 1] = {
           file = file,
           icon = "file",
-          action = ":e " .. file,
+          action = ":e " .. vim.fn.fnameescape(file),
           autokey = true,
         }
         if #ret >= limit then
@@ -995,6 +990,26 @@ function M.sections.terminal(opts)
         pty = true,
         on_stdout = function(_, data)
           data = table.concat(data, "\n")
+
+          local termenv = {
+            ["\27%]11;%?\27\\"] = function() -- OSC 11
+              local rgb = (vim.o.background == "light") and "ffff/ffff/ffff" or "0000/0000/0000"
+              return "\x1b]11;rgb:" .. rgb .. "\x1b\\"
+            end,
+            ["\27%[6n"] = function() -- CSI 6 n
+              return "\x1b[1;" .. tostring(width) .. "R"
+            end,
+          }
+          for seq, repl in pairs(termenv) do
+            if data:find(seq) then
+              pcall(vim.fn.chansend, jid, repl())
+              data = data:gsub(seq, "")
+            end
+          end
+          if data == "" then
+            return
+          end
+
           if recording:is_active() then
             table.insert(output, data)
           end

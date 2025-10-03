@@ -15,14 +15,27 @@ function M.severity(item, picker)
   local lower = severity:lower()
   local cap = severity:sub(1, 1):upper() .. lower:sub(2)
 
+  if picker.opts.formatters.severity.pos == "right" then
+    return {
+      {
+        col = 0,
+        virt_text = { { picker.opts.icons.diagnostics[cap], "Diagnostic" .. cap } },
+        virt_text_pos = "right_align",
+        hl_mode = "combine",
+      },
+    }
+  end
+
   if picker.opts.formatters.severity.icons then
     ret[#ret + 1] = { picker.opts.icons.diagnostics[cap], "Diagnostic" .. cap, virtual = true }
     ret[#ret + 1] = { " ", virtual = true }
   end
+
   if picker.opts.formatters.severity.level then
     ret[#ret + 1] = { lower:upper(), "Diagnostic" .. cap, virtual = true }
     ret[#ret + 1] = { " ", virtual = true }
   end
+
   return ret
 end
 
@@ -44,12 +57,14 @@ function M.filename(item, picker)
   end
 
   if picker.opts.icons.files.enabled ~= false then
-    local icon, hl = Snacks.util.icon(name, cat)
+    local icon, hl = Snacks.util.icon(name, cat, {
+      fallback = picker.opts.icons.files,
+    })
     if item.dir and item.open then
-      icon = " "
+      icon = picker.opts.icons.files.dir_open
     end
-    local padded_icon = icon:sub(-1) == " " and icon or icon .. " "
-    ret[#ret + 1] = { padded_icon, hl, virtual = true }
+    icon = Snacks.picker.util.align(icon, picker.opts.formatters.file.icon_width or 2)
+    ret[#ret + 1] = { icon, hl, virtual = true }
   end
 
   local base_hl = item.dir and "SnacksPickerDirectory" or "SnacksPickerFile"
@@ -67,6 +82,8 @@ function M.filename(item, picker)
     base_hl = "SnacksPickerPathIgnored"
   elseif is("hidden") then
     base_hl = "SnacksPickerPathHidden"
+  elseif item.filename_hl then
+    base_hl = item.filename_hl
   end
   local dir_hl = "SnacksPickerDir"
 
@@ -120,19 +137,19 @@ function M.file(item, picker)
     ret[#ret + 1] = { " ", virtual = true }
   end
 
-  if item.severity then
-    vim.list_extend(ret, M.severity(item, picker))
-  end
-
   if item.parent then
     vim.list_extend(ret, M.tree(item, picker))
   end
 
-  vim.list_extend(ret, M.filename(item, picker))
-
   if item.status then
     vim.list_extend(ret, M.file_git_status(item, picker))
   end
+
+  if item.severity then
+    vim.list_extend(ret, M.severity(item, picker))
+  end
+
+  vim.list_extend(ret, M.filename(item, picker))
 
   if item.comment then
     table.insert(ret, { item.comment, "SnacksPickerComment" })
@@ -151,7 +168,7 @@ function M.git_log(item, picker)
   local ret = {} ---@type snacks.picker.Highlight[]
   ret[#ret + 1] = { picker.opts.icons.git.commit, "SnacksPickerGitCommit" }
   local c = item.commit or item.branch or "HEAD"
-  ret[#ret + 1] = { a(c, 7, { truncate = true }), "SnacksPickerGitCommit" }
+  ret[#ret + 1] = { a(c, 8, { truncate = true }), "SnacksPickerGitCommit" }
 
   ret[#ret + 1] = { " " }
   if item.date then
@@ -295,18 +312,18 @@ function M.lsp_symbol(item, picker)
   return ret
 end
 
----@param kind? string
----@param count number
+---@param opts snacks.picker.ui_select.Opts
 ---@return snacks.picker.format
-function M.ui_select(kind, count)
-  return function(item)
+function M.ui_select(opts)
+  return function(item, picker)
+    local count = picker:count()
     local ret = {} ---@type snacks.picker.Highlight[]
     local idx = tostring(item.idx)
     idx = (" "):rep(#tostring(count) - #idx) .. idx
     ret[#ret + 1] = { idx .. ".", "SnacksPickerIdx" }
     ret[#ret + 1] = { " " }
 
-    if kind == "codeaction" then
+    if opts.kind == "codeaction" then
       ---@type lsp.Command|lsp.CodeAction, lsp.HandlerContext
       local action, ctx = item.item.action, item.item.ctx
       local client = vim.lsp.get_client_by_id(ctx.client_id)
@@ -314,6 +331,13 @@ function M.ui_select(kind, count)
       if client then
         ret[#ret + 1] = { " " }
         ret[#ret + 1] = { ("[%s]"):format(client.name), "SnacksPickerSpecial" }
+      end
+    elseif opts.kind == "snacks" and opts.format_item then
+      local t = opts.format_item(item.item, true)
+      if type(t) == "string" then
+        ret[#ret + 1] = { t }
+      elseif type(t) == "table" then
+        vim.list_extend(ret, t)
       end
     else
       ret[#ret + 1] = { item.formatted }
@@ -374,7 +398,7 @@ function M.diagnostic(item, picker)
     vim.list_extend(ret, M.severity(item, picker))
   end
 
-  local message = diag.message:gsub("\n", " ")
+  local message = diag.message
   ret[#ret + 1] = { message }
   Snacks.picker.highlight.markdown(ret)
   ret[#ret + 1] = { " " }
@@ -528,6 +552,16 @@ function M.git_status(item, picker)
   local hl = hls[s] or "SnacksPickerGitStatus"
   ret[#ret + 1] = { a(item.status, 2, { align = "right" }), hl }
   ret[#ret + 1] = { " " }
+  if item.rename then
+    local file = item.file
+    item.file = item.rename
+    item._path = nil
+    vim.list_extend(ret, M.filename(item, picker))
+    item.file = file
+    item._path = nil
+    ret[#ret + 1] = { "-> ", "SnacksPickerDelim" }
+    ret[#ret + 1] = { " " }
+  end
   vim.list_extend(ret, M.filename(item, picker))
   return ret
 end
@@ -543,6 +577,10 @@ function M.file_git_status(item, picker)
     hl = "SnacksPickerGitStatusStaged"
   else
     hl = "SnacksPickerGitStatus" .. status.status:sub(1, 1):upper() .. status.status:sub(2)
+  end
+
+  if picker.opts.formatters.file.git_status_hl then
+    item.filename_hl = hl
   end
 
   local icon = status.status:sub(1, 1):upper()

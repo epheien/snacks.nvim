@@ -40,7 +40,7 @@ function M:find()
   if self.opts.current then
     return current
   end
-  local prev = vim.fn.winnr("#")
+  local prev = vim.fn.win_getid(vim.fn.winnr("#"))
   local non_float = 0
   local wins = { self.win, current, prev }
   local all = vim.api.nvim_tabpage_list_wins(0)
@@ -57,6 +57,10 @@ function M:find()
     if win == 0 or not vim.api.nvim_win_is_valid(win) then
       return false
     end
+    local buf = vim.api.nvim_win_get_buf(win)
+    if vim.w[win].snacks_main or vim.b[buf].snacks_main then
+      return true
+    end
     local win_config = vim.api.nvim_win_get_config(win)
     local is_float = win_config.relative ~= ""
     if not is_float then
@@ -65,7 +69,6 @@ function M:find()
     if vim.w[win].snacks_layout then
       return false
     end
-    local buf = vim.api.nvim_win_get_buf(win)
     -- exclude non-file buffers
     if self.opts.file and vim.bo[buf].buftype ~= "" then
       return false

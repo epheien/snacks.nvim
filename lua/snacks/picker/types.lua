@@ -11,9 +11,10 @@
 ---@field diagnostics_buffer fun(opts?: snacks.picker.diagnostics.Config|{}): snacks.Picker
 ---@field explorer fun(opts?: snacks.picker.explorer.Config|{}): snacks.Picker
 ---@field files fun(opts?: snacks.picker.files.Config|{}): snacks.Picker
----@field git_branches fun(opts?: snacks.picker.Config|{}): snacks.Picker
----@field git_diff fun(opts?: snacks.picker.Config|{}): snacks.Picker
+---@field git_branches fun(opts?: snacks.picker.git.branches.Config|{}): snacks.Picker
+---@field git_diff fun(opts?: snacks.picker.git.Config|{}): snacks.Picker
 ---@field git_files fun(opts?: snacks.picker.git.files.Config|{}): snacks.Picker
+---@field git_grep fun(opts?: snacks.picker.git.grep.Config|{}): snacks.Picker
 ---@field git_log fun(opts?: snacks.picker.git.log.Config|{}): snacks.Picker
 ---@field git_log_file fun(opts?: snacks.picker.git.log.Config|{}): snacks.Picker
 ---@field git_log_line fun(opts?: snacks.picker.git.log.Config|{}): snacks.Picker
@@ -30,6 +31,7 @@
 ---@field lazy fun(opts?: snacks.picker.Config|{}): snacks.Picker
 ---@field lines fun(opts?: snacks.picker.lines.Config|{}): snacks.Picker
 ---@field loclist fun(opts?: snacks.picker.qf.Config|{}): snacks.Picker
+---@field lsp_config fun(opts?: snacks.picker.lsp.config.Config|{}): snacks.Picker
 ---@field lsp_declarations fun(opts?: snacks.picker.lsp.Config|{}): snacks.Picker
 ---@field lsp_definitions fun(opts?: snacks.picker.lsp.Config|{}): snacks.Picker
 ---@field lsp_implementations fun(opts?: snacks.picker.lsp.Config|{}): snacks.Picker
@@ -49,10 +51,10 @@
 ---@field qflist fun(opts?: snacks.picker.qf.Config|{}): snacks.Picker
 ---@field recent fun(opts?: snacks.picker.recent.Config|{}): snacks.Picker
 ---@field registers fun(opts?: snacks.picker.Config|{}): snacks.Picker
----@field resume fun(opts?: snacks.picker.Config|{}): snacks.Picker
+---@field resume fun(): snacks.Picker
 ---@field search_history fun(opts?: snacks.picker.history.Config|{}): snacks.Picker
----@field select fun(opts?: snacks.picker.Config|{}): snacks.Picker
 ---@field smart fun(opts?: snacks.picker.smart.Config|{}): snacks.Picker
 ---@field spelling fun(opts?: snacks.picker.Config|{}): snacks.Picker
+---@field treesitter fun(opts?: snacks.picker.treesitter.Config|{}): snacks.Picker
 ---@field undo fun(opts?: snacks.picker.undo.Config|{}): snacks.Picker
 ---@field zoxide fun(opts?: snacks.picker.Config|{}): snacks.Picker

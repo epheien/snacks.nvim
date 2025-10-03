@@ -204,6 +204,10 @@ local function get_state(win, buf, top, bottom)
   return state
 end
 
+function M.debug_win()
+  Snacks.debug.inspect(states[vim.api.nvim_get_current_win()])
+end
+
 --- Called during every redraw cycle, so it should be fast.
 --- Everything that can be cached should be cached.
 ---@param win number
@@ -252,7 +256,7 @@ function M.on_win(win, buf, top, bottom)
           indents[prev] = indents[prev] or vim.fn.indent(prev)
           indents[next] = indents[next] or vim.fn.indent(next)
           indent = math.min(indents[prev], indents[next])
-          if indents[prev] ~= indents[next] then
+          if indents[prev] ~= indents[next] and indent > 0 then
             indent = indent + state.shiftwidth
           end
         else
@@ -388,6 +392,9 @@ end
 ---@param value number
 ---@param prev? number
 local function step(scope, value, prev)
+  if not vim.api.nvim_win_is_valid(scope.win) then
+    return
+  end
   prev = prev or 0
   local cursor = vim.api.nvim_win_get_cursor(scope.win)
   local dt = math.abs(scope.from - cursor[1])

@@ -602,9 +602,15 @@ function M.picker_types(types)
   lines[#lines + 1] = ""
   lines[#lines + 1] = "---@class snacks.picker"
   for _, source in ipairs(sources) do
-    local t = types[source] or "snacks.picker.Config"
-    t = t:gsub("|.*", "") .. "|{}"
-    lines[#lines + 1] = ("---@field %s fun(opts?: %s): snacks.Picker"):format(source, t)
+    if source ~= "select" then
+      local t = types[source] or "snacks.picker.Config"
+      t = t:gsub("|.*", "") .. "|{}"
+      if source == "resume" then
+        lines[#lines + 1] = ("---@field %s fun(): snacks.Picker"):format(source)
+      else
+        lines[#lines + 1] = ("---@field %s fun(opts?: %s): snacks.Picker"):format(source, t)
+      end
+    end
   end
   vim.fn.writefile(lines, "lua/snacks/picker/types.lua")
 end
@@ -674,6 +680,7 @@ function M.fix_titles()
   for file, t in vim.fs.dir("doc", { depth = 1 }) do
     if t == "file" and file:find("%.txt$") then
       local lines = vim.fn.readfile("doc/" .. file) --[[@as string[] ]]
+      lines[1] = lines[1]:gsub("%.txt", ""):gsub("%.nvim", "")
       for i, line in ipairs(lines) do
         -- Example: SNACKS.GIT.BLAME_LINE()            *snacks-git-module-snacks.git.blame_line()*
         local func = line:gsub("^SNACKS.*module%-snacks(.+%(%))%*$", "Snacks%1")

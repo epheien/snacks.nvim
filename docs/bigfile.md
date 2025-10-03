@@ -8,7 +8,7 @@ Use the `setup` config function to further make changes to a `bigfile` buffer.
 The context provides the actual filetype.
 
 The default implementation enables `syntax` for the buffer and disables
-[mini.animate](https://github.com/echasnovski/mini.animate) (if used)
+[mini.animate](https://github.com/nvim-mini/mini.animate) (if used)
 
 <!-- docgen -->
 
@@ -37,6 +37,7 @@ The default implementation enables `syntax` for the buffer and disables
 {
   notify = true, -- show notification when big file detected
   size = 1.5 * 1024 * 1024, -- 1.5MB
+  line_length = 1000, -- average line length (useful for minified files)
   -- Enable or disable features when big file detected
   ---@param ctx {buf: number, ft:string}
   setup = function(ctx)

@@ -28,7 +28,7 @@ Some acknowledgements:
 
 - [fzf-lua](https://github.com/ibhagwan/fzf-lua)
 - [telescope.nvim](https://github.com/nvim-telescope/telescope.nvim)
-- [mini.pick](https://github.com/echasnovski/mini.pick)
+- [mini.pick](https://github.com/nvim-mini/mini.pick)
 
 ## 📚 Usage
 
@@ -91,7 +91,8 @@ Snacks.picker.pick({source = "files", ...})
 ---@field title? string defaults to a capitalized source name
 ---@field auto_close? boolean automatically close the picker when focusing another window (defaults to true)
 ---@field show_empty? boolean show the picker even when there are no items
----@field focus? "input"|"list"|false where to focus when the picker is opened (defaults to "input")
+---@field focus? "input"|"list" where to focus when the picker is opened (defaults to "input")
+---@field enter? boolean enter the picker when opening it
 ---@field toggles? table<string, string|false|snacks.picker.toggle>
 --- Preset options
 ---@field previewers? snacks.picker.previewers.Config|{}
@@ -109,6 +110,7 @@ Snacks.picker.pick({source = "files", ...})
 ---@field jump? snacks.picker.jump.Config|{}
 --- Other
 ---@field config? fun(opts:snacks.picker.Config):snacks.picker.Config? custom config function
+---@field db? snacks.picker.db.Config|{}
 ---@field debug? snacks.picker.debug|{}
 {
   prompt = " ",
@@ -149,6 +151,8 @@ Snacks.picker.pick({source = "files", ...})
       filename_first = false, -- display filename before the file path
       truncate = 40, -- truncate the file path to (roughly) this length
       filename_only = false, -- only show the filename
+      icon_width = 2, -- width of the icon (in characters)
+      git_status_hl = true, -- use the git status highlight group for the filename
     },
     selected = {
       show_always = false, -- only show the selected column when there are multiple selections
@@ -157,12 +161,19 @@ Snacks.picker.pick({source = "files", ...})
     severity = {
       icons = true, -- show severity icons
       level = false, -- show severity level
+      ---@type "left"|"right"
+      pos = "left", -- position of the diagnostics
     },
   },
   ---@class snacks.picker.previewers.Config
   previewers = {
+    diff = {
+      builtin = true, -- use Neovim for previewing diffs (true) or use an external tool (false)
+      cmd = { "delta" }, -- example to show a diff with delta
+    },
     git = {
-      native = false, -- use native (terminal) or Neovim for previewing git diffs and commits
+      builtin = true, -- use Neovim for previewing git output (true) or use git (false)
+      args = {}, -- additional arguments passed to the git command. Useful to set pager options usin `-c ...`
     },
     file = {
       max_size = 1024 * 1024, -- 1MB
@@ -196,11 +207,11 @@ Snacks.picker.pick({source = "files", ...})
         ["/"] = "toggle_focus",
         ["<C-Down>"] = { "history_forward", mode = { "i", "n" } },
         ["<C-Up>"] = { "history_back", mode = { "i", "n" } },
-        ["<C-c>"] = { "close", mode = "i" },
+        ["<C-c>"] = { "cancel", mode = "i" },
         ["<C-w>"] = { "<c-s-w>", mode = { "i" }, expr = true, desc = "delete word" },
         ["<CR>"] = { "confirm", mode = { "n", "i" } },
         ["<Down>"] = { "list_down", mode = { "i", "n" } },
-        ["<Esc>"] = "close",
+        ["<Esc>"] = "cancel",
         ["<S-CR>"] = { { "pick_win", "jump" }, mode = { "n", "i" } },
         ["<S-Tab>"] = { "select_and_prev", mode = { "i", "n" } },
         ["<Tab>"] = { "select_and_next", mode = { "i", "n" } },
@@ -223,16 +234,20 @@ Snacks.picker.pick({source = "files", ...})
         ["<c-p>"] = { "list_up", mode = { "i", "n" } },
         ["<c-q>"] = { "qflist", mode = { "i", "n" } },
         ["<c-s>"] = { "edit_split", mode = { "i", "n" } },
+        ["<c-t>"] = { "tab", mode = { "n", "i" } },
         ["<c-u>"] = { "list_scroll_up", mode = { "i", "n" } },
         ["<c-v>"] = { "edit_vsplit", mode = { "i", "n" } },
-        ["<c-z>h"] = { "layout_left", mode = { "i", "n" } },
-        ["<c-z><c-h>"] = { "layout_left", mode = { "i", "n" } },
-        ["<c-z>j"] = { "layout_bottom", mode = { "i", "n" } },
-        ["<c-z><c-j>"] = { "layout_bottom", mode = { "i", "n" } },
-        ["<c-z>k"] = { "layout_top", mode = { "i", "n" } },
-        ["<c-z><c-k>"] = { "layout_top", mode = { "i", "n" } },
-        ["<c-z>l"] = { "layout_right", mode = { "i", "n" } },
-        ["<c-z><c-l>"] = { "layout_right", mode = { "i", "n" } },
+        ["<c-r>#"] = { "insert_alt", mode = "i" },
+        ["<c-r>%"] = { "insert_filename", mode = "i" },
+        ["<c-r><c-a>"] = { "insert_cWORD", mode = "i" },
+        ["<c-r><c-f>"] = { "insert_file", mode = "i" },
+        ["<c-r><c-l>"] = { "insert_line", mode = "i" },
+        ["<c-r><c-p>"] = { "insert_file_full", mode = "i" },
+        ["<c-r><c-w>"] = { "insert_cword", mode = "i" },
+        ["<c-w>H"] = "layout_left",
+        ["<c-w>J"] = "layout_bottom",
+        ["<c-w>K"] = "layout_top",
+        ["<c-w>L"] = "layout_right",
         ["?"] = "toggle_help_input",
         ["G"] = "list_bottom",
         ["gg"] = "list_top",
@@ -251,7 +266,7 @@ Snacks.picker.pick({source = "files", ...})
         ["<2-LeftMouse>"] = "confirm",
         ["<CR>"] = "confirm",
         ["<Down>"] = "list_down",
-        ["<Esc>"] = "close",
+        ["<Esc>"] = "cancel",
         ["<S-CR>"] = { { "pick_win", "jump" } },
         ["<S-Tab>"] = { "select_and_prev", mode = { "n", "x" } },
         ["<Tab>"] = { "select_and_next", mode = { "n", "x" } },
@@ -271,17 +286,15 @@ Snacks.picker.pick({source = "files", ...})
         ["<c-k>"] = "list_up",
         ["<c-n>"] = "list_down",
         ["<c-p>"] = "list_up",
+        ["<c-q>"] = "qflist",
         ["<c-s>"] = "edit_split",
+        ["<c-t>"] = "tab",
         ["<c-u>"] = "list_scroll_up",
         ["<c-v>"] = "edit_vsplit",
-        ["<c-z>h"] = { "layout_left", mode = { "i", "n" } },
-        ["<c-z><c-h>"] = { "layout_left", mode = { "i", "n" } },
-        ["<c-z>j"] = { "layout_bottom", mode = { "i", "n" } },
-        ["<c-z><c-j>"] = { "layout_bottom", mode = { "i", "n" } },
-        ["<c-z>k"] = { "layout_top", mode = { "i", "n" } },
-        ["<c-z><c-k>"] = { "layout_top", mode = { "i", "n" } },
-        ["<c-z>l"] = { "layout_right", mode = { "i", "n" } },
-        ["<c-z><c-l>"] = { "layout_right", mode = { "i", "n" } },
+        ["<c-w>H"] = "layout_left",
+        ["<c-w>J"] = "layout_bottom",
+        ["<c-w>K"] = "layout_top",
+        ["<c-w>L"] = "layout_right",
         ["?"] = "toggle_help_list",
         ["G"] = "list_bottom",
         ["gg"] = "list_top",
@@ -301,11 +314,9 @@ Snacks.picker.pick({source = "files", ...})
     -- preview window
     preview = {
       keys = {
-        ["<Esc>"] = "close",
+        ["<Esc>"] = "cancel",
         ["q"] = "close",
         ["i"] = "focus_input",
-        ["<ScrollWheelDown>"] = "list_scroll_wheel_down",
-        ["<ScrollWheelUp>"] = "list_scroll_wheel_up",
         ["<a-w>"] = "cycle_win",
       },
     },
@@ -314,6 +325,9 @@ Snacks.picker.pick({source = "files", ...})
   icons = {
     files = {
       enabled = true, -- show file icons
+      dir = "󰉋 ",
+      dir_open = "󰝰 ",
+      file = "󰈔 "
     },
     keymaps = {
       nowait = "󰓅 "
@@ -352,6 +366,12 @@ Snacks.picker.pick({source = "files", ...})
       Warn  = " ",
       Hint  = " ",
       Info  = " ",
+    },
+    lsp = {
+      unavailable = "",
+      enabled = " ",
+      disabled = " ",
+      attached = "󰖩 "
     },
     kinds = {
       Array         = " ",
@@ -394,12 +414,22 @@ Snacks.picker.pick({source = "files", ...})
       Variable      = "󰀫 ",
     },
   },
+  ---@class snacks.picker.db.Config
+  db = {
+    -- path to the sqlite3 library
+    -- If not set, it will try to load the library by name.
+    -- On Windows it will download the library from the internet.
+    sqlite3_path = nil, ---@type string?
+  },
   ---@class snacks.picker.debug
   debug = {
     scores = false, -- show scores in the list
     leaks = false, -- show when pickers don't get garbage collected
     explorer = false, -- show explorer debug info
     files = false, -- show file debug info
+    grep = false, -- show file debug info
+    proc = false, -- show proc debug info
+    extmarks = false, -- show extmarks errors
   },
 }
 ```
@@ -578,20 +608,15 @@ Snacks.picker.pick({source = "files", ...})
 ```
 
 ```lua
----@alias snacks.Picker.ref (fun():snacks.Picker?)|{value?: snacks.Picker}
+---@class snacks.picker.yank.Action: snacks.picker.Action
+---@field reg? string
+---@field field? string
+---@field notify? boolean
 ```
 
 ```lua
----@class snacks.picker.Last
----@field cursor number
----@field topline number
----@field opts? snacks.picker.Config
----@field selected snacks.picker.Item[]
----@field filter snacks.picker.Filter
-```
-
-```lua
----@alias snacks.picker.history.Record {pattern: string, search: string, live?: boolean}
+---@class snacks.picker.insert.Action: snacks.picker.Action
+---@field expr string
 ```
 
 ```lua
@@ -659,8 +684,10 @@ It's a previewer that shows a preview based on the item data.
 ---@field reverse? boolean when true, the list will be reversed (bottom-up)
 ---@field fullscreen? boolean open in fullscreen
 ---@field cycle? boolean cycle through the list
----@field preview? boolean|"main"|{enabled?:boolean, main?:boolean} show preview window in the picker or the main window
+---@field preview? "main" show preview window in the picker or the main window
 ---@field preset? string|fun(source:string):string
+---@field hidden? ("input"|"preview"|"list")[] don't show the given windows when opening the picker. (only "input" and "preview" make sense)
+---@field auto_hide? ("input"|"preview"|"list")[] hide the given windows when not focused (only "input" makes real sense)
 ```
 
 ```lua
@@ -668,6 +695,23 @@ It's a previewer that shows a preview based on the item data.
 ---@field input? snacks.win.Config|{} input window config
 ---@field list? snacks.win.Config|{} result list window config
 ---@field preview? snacks.win.Config|{} preview window config
+```
+
+```lua
+---@alias snacks.Picker.ref (fun():snacks.Picker?)|{value?: snacks.Picker}
+```
+
+```lua
+---@class snacks.picker.Last
+---@field cursor number
+---@field topline number
+---@field opts? snacks.picker.Config
+---@field selected snacks.picker.Item[]
+---@field filter snacks.picker.Filter
+```
+
+```lua
+---@alias snacks.picker.history.Record {pattern: string, search: string, live?: boolean}
 ```
 
 ## 📦 Module
@@ -701,10 +745,11 @@ Snacks.picker()
 
 ### `Snacks.picker.get()`
 
-Get active pickers, optionally filtered by source
+Get active pickers, optionally filtered by source,
+or the current tab
 
 ```lua
----@param opts? {source?: string}
+---@param opts? {source?: string, tab?: boolean} tab defaults to true
 Snacks.picker.get(opts)
 ```
 
@@ -768,7 +813,6 @@ Snacks.picker.select(...)
   win = {
     input = {
       keys = {
-        ["dd"] = "bufdelete",
         ["<c-x>"] = { "bufdelete", mode = { "n", "i" } },
       },
     },
@@ -917,14 +961,23 @@ Neovim commands
 ---@field tree? boolean show the file tree (default: true)
 ---@field git_status? boolean show git status (default: true)
 ---@field git_status_open? boolean show recursive git status for open directories
+---@field git_untracked? boolean needed to show untracked git status
+---@field diagnostics? boolean show diagnostics
+---@field diagnostics_open? boolean show recursive diagnostics for open directories
 ---@field watch? boolean watch for file changes
+---@field exclude? string[] exclude glob patterns
+---@field include? string[] include glob patterns. These take precedence over `exclude`, `ignored` and `hidden`
 {
   finder = "explorer",
   sort = { fields = { "sort" } },
+  supports_live = true,
   tree = true,
   watch = true,
+  diagnostics = true,
+  diagnostics_open = false,
   git_status = true,
   git_status_open = false,
+  git_untracked = true,
   follow_file = true,
   focus = "list",
   auto_close = false,
@@ -933,7 +986,10 @@ Neovim commands
   -- to show the explorer to the right, add the below to
   -- your config under `opts.picker.sources.explorer`
   -- layout = { layout = { position = "right" } },
-  formatters = { file = { filename_only = true } },
+  formatters = {
+    file = { filename_only = true },
+    severity = { pos = "right" },
+  },
   matcher = { sort_empty = false, fuzzy = false },
   config = function(opts)
     return require("snacks.picker.source.explorer").setup(opts)
@@ -951,15 +1007,24 @@ Neovim commands
         ["m"] = "explorer_move",
         ["o"] = "explorer_open", -- open with system application
         ["P"] = "toggle_preview",
-        ["y"] = "explorer_yank",
+        ["y"] = { "explorer_yank", mode = { "n", "x" } },
+        ["p"] = "explorer_paste",
         ["u"] = "explorer_update",
         ["<c-c>"] = "tcd",
+        ["<leader>/"] = "picker_grep",
+        ["<c-t>"] = "terminal",
         ["."] = "explorer_focus",
         ["I"] = "toggle_ignored",
         ["H"] = "toggle_hidden",
         ["Z"] = "explorer_close_all",
         ["]g"] = "explorer_git_next",
         ["[g"] = "explorer_git_prev",
+        ["]d"] = "explorer_diagnostic_next",
+        ["[d"] = "explorer_diagnostic_prev",
+        ["]w"] = "explorer_warn_next",
+        ["[w"] = "explorer_warn_prev",
+        ["]e"] = "explorer_error_next",
+        ["[e"] = "explorer_error_prev",
       },
     },
   },
@@ -981,6 +1046,7 @@ Neovim commands
 ---@field follow? boolean follow symlinks
 ---@field exclude? string[] exclude patterns
 ---@field args? string[] additional arguments
+---@field ft? string|string[] file extension(s)
 ---@field rtp? boolean search in runtimepath
 {
   finder = "files",
@@ -1000,11 +1066,23 @@ Neovim commands
 ```
 
 ```lua
+---@class snacks.picker.git.branches.Config: snacks.picker.git.Config
+---@field all? boolean show all branches, including remote
 {
+  all = false,
   finder = "git_branches",
   format = "git_branch",
   preview = "git_log",
   confirm = "git_checkout",
+  win = {
+    input = {
+      keys = {
+        ["<c-a>"] = { "git_branch_add", mode = { "n", "i" } },
+        ["<c-x>"] = { "git_branch_del", mode = { "n", "i" } },
+      },
+    },
+  },
+  ---@param picker snacks.Picker
   on_show = function(picker)
     for i, item in ipairs(picker:items()) do
       if item.current then
@@ -1024,10 +1102,11 @@ Neovim commands
 ```
 
 ```lua
+---@type snacks.picker.git.Config
 {
   finder = "git_diff",
   format = "file",
-  preview = "preview",
+  preview = "diff",
 }
 ```
 
@@ -1040,7 +1119,7 @@ Neovim commands
 Find git files
 
 ```lua
----@class snacks.picker.git.files.Config: snacks.picker.Config
+---@class snacks.picker.git.files.Config: snacks.picker.git.Config
 ---@field untracked? boolean show untracked files
 ---@field submodules? boolean show submodule files
 {
@@ -1049,6 +1128,31 @@ Find git files
   format = "file",
   untracked = false,
   submodules = false,
+}
+```
+
+### `git_grep`
+
+```vim
+:lua Snacks.picker.git_grep(opts?)
+```
+
+Grep in git files
+
+```lua
+---@class snacks.picker.git.grep.Config: snacks.picker.git.Config
+---@field untracked? boolean search in untracked files
+---@field submodules? boolean search in submodule files
+---@field need_search? boolean require a search pattern
+{
+  finder = "git_grep",
+  format = "file",
+  untracked = false,
+  need_search = true,
+  submodules = false,
+  show_empty = true,
+  supports_live = true,
+  live = true,
 }
 ```
 
@@ -1061,15 +1165,17 @@ Find git files
 Git log
 
 ```lua
----@class snacks.picker.git.log.Config: snacks.picker.Config
+---@class snacks.picker.git.log.Config: snacks.picker.git.Config
 ---@field follow? boolean track file history across renames
 ---@field current_file? boolean show current file log
 ---@field current_line? boolean show current line log
+---@field author? string filter commits by author
 {
   finder = "git_log",
   format = "git_log",
   preview = "git_show",
   confirm = "git_checkout",
+  sort = { fields = { "score:desc", "idx" } },
 }
 ```
 
@@ -1088,6 +1194,7 @@ Git log
   current_file = true,
   follow = true,
   confirm = "git_checkout",
+  sort = { fields = { "score:desc", "idx" } },
 }
 ```
 
@@ -1106,6 +1213,7 @@ Git log
   current_line = true,
   follow = true,
   confirm = "git_checkout",
+  sort = { fields = { "score:desc", "idx" } },
 }
 ```
 
@@ -1131,7 +1239,7 @@ Git log
 ```
 
 ```lua
----@class snacks.picker.git.status.Config: snacks.picker.Config
+---@class snacks.picker.git.status.Config: snacks.picker.git.Config
 ---@field ignored? boolean show ignored files
 {
   finder = "git_status",
@@ -1206,6 +1314,7 @@ Git log
 ---@type snacks.picker.grep.Config|{}
 {
   finder = "grep",
+  regex = false,
   format = "file",
   search = function(picker)
     return picker:word()
@@ -1248,6 +1357,7 @@ Neovim help tags
   finder = "vim_highlights",
   format = "hl",
   preview = "preview",
+  confirm = "close",
 }
 ```
 
@@ -1302,11 +1412,14 @@ Neovim help tags
   plugs = false,
   ["local"] = true,
   modes = { "n", "v", "x", "s", "o", "i", "c", "t" },
+  ---@param picker snacks.Picker
   confirm = function(picker, item)
-    picker:close()
-    if item then
-      vim.api.nvim_input(item.item.lhs)
-    end
+    picker:norm(function()
+      if item then
+        picker:close()
+        vim.api.nvim_input(item.item.lhs)
+      end
+    end)
   end,
   actions = {
     toggle_global = function(picker)
@@ -1340,7 +1453,6 @@ Search for a lazy.nvim plugin spec
 ```lua
 {
   finder = "lazy_spec",
-  live = false,
   pattern = "'",
 }
 ```
@@ -1391,6 +1503,27 @@ Loclist
   finder = "qf",
   format = "file",
   qf_win = 0,
+}
+```
+
+### `lsp_config`
+
+```vim
+:lua Snacks.picker.lsp_config(opts?)
+```
+
+```lua
+---@class snacks.picker.lsp.config.Config: snacks.picker.Config
+---@field installed? boolean only show installed servers
+---@field configured? boolean only show configured servers (setup with lspconfig)
+---@field attached? boolean|number only show attached servers. When `number`, show only servers attached to that buffer (can be 0)
+{
+  finder = "lsp.config#find",
+  format = "lsp.config#format",
+  preview = "lsp.config#preview",
+  confirm = "close",
+  sort = { fields = { "score:desc", "attached_buf", "attached", "enabled", "installed", "name" } },
+  matcher = { sort_empty = true },
 }
 ```
 
@@ -1617,6 +1750,7 @@ vim.tbl_extend("force", {}, M.lsp_symbols, {
   format = "notification",
   preview = "preview",
   formatters = { severity = { level = true } },
+  confirm = "close",
 }
 ```
 
@@ -1897,6 +2031,39 @@ Not meant to be used directly.
 }
 ```
 
+### `treesitter`
+
+```vim
+:lua Snacks.picker.treesitter(opts?)
+```
+
+```lua
+---@class snacks.picker.treesitter.Config: snacks.picker.Config
+---@field filter table<string, string[]|boolean>? symbol kind filter
+---@field tree? boolean show symbol tree
+{
+  finder = "treesitter_symbols",
+  format = "lsp_symbol",
+  tree = true,
+  filter = {
+    default = {
+      "Class",
+      "Enum",
+      "Field",
+      "Function",
+      "Method",
+      "Module",
+      "Namespace",
+      "Struct",
+      "Trait",
+    },
+    -- set to `true` to include all symbols
+    markdown = true,
+    help = true,
+  },
+}
+```
+
 ### `undo`
 
 ```vim
@@ -1909,9 +2076,21 @@ Not meant to be used directly.
 {
   finder = "vim_undo",
   format = "undo",
-  preview = "preview",
+  preview = "diff",
   confirm = "item_action",
-  win = { preview = { wo = { number = false, relativenumber = false, signcolumn = "no" } } },
+  win = {
+    preview = { wo = { number = false, relativenumber = false, signcolumn = "no" } },
+    input = {
+      keys = {
+        ["<c-y>"] = { "yank_add", mode = { "n", "i" } },
+        ["<c-s-y>"] = { "yank_del", mode = { "n", "i" } },
+      },
+    },
+  },
+  actions = {
+    yank_add = { action = "yank", field = "added_lines" },
+    yank_del = { action = "yank", field = "removed_lines" },
+  },
   icons = { tree = { last = "┌╴" } }, -- the tree is upside down
   diff = {
     ctxlen = 4,
@@ -2193,6 +2372,12 @@ local M = {}
 Snacks.picker.actions.bufdelete(picker)
 ```
 
+### `Snacks.picker.actions.cancel()`
+
+```lua
+Snacks.picker.actions.cancel(picker)
+```
+
 ### `Snacks.picker.actions.cd()`
 
 ```lua
@@ -2235,6 +2420,18 @@ Snacks.picker.actions.focus_list(picker)
 Snacks.picker.actions.focus_preview(picker)
 ```
 
+### `Snacks.picker.actions.git_branch_add()`
+
+```lua
+Snacks.picker.actions.git_branch_add(picker)
+```
+
+### `Snacks.picker.actions.git_branch_del()`
+
+```lua
+Snacks.picker.actions.git_branch_del(picker, item)
+```
+
 ### `Snacks.picker.actions.git_checkout()`
 
 ```lua
@@ -2269,6 +2466,12 @@ Snacks.picker.actions.history_back(picker)
 
 ```lua
 Snacks.picker.actions.history_forward(picker)
+```
+
+### `Snacks.picker.actions.insert()`
+
+```lua
+Snacks.picker.actions.insert(picker, _, action)
 ```
 
 ### `Snacks.picker.actions.inspect()`
@@ -2416,7 +2619,7 @@ Snacks.picker.actions.preview_scroll_up(picker)
 ### `Snacks.picker.actions.put()`
 
 ```lua
-Snacks.picker.actions.put(picker, item)
+Snacks.picker.actions.put(picker, item, action)
 ```
 
 ### `Snacks.picker.actions.qflist()`
@@ -2474,6 +2677,12 @@ Snacks.picker.actions.select_and_prev(picker)
 Snacks.picker.actions.tcd(_, item)
 ```
 
+### `Snacks.picker.actions.terminal()`
+
+```lua
+Snacks.picker.actions.terminal(_, item)
+```
+
 ### `Snacks.picker.actions.toggle_focus()`
 
 ```lua
@@ -2490,6 +2699,12 @@ Snacks.picker.actions.toggle_help_input(picker)
 
 ```lua
 Snacks.picker.actions.toggle_help_list(picker)
+```
+
+### `Snacks.picker.actions.toggle_input()`
+
+```lua
+Snacks.picker.actions.toggle_input(picker)
 ```
 
 ### `Snacks.picker.actions.toggle_live()`
@@ -2513,8 +2728,10 @@ Snacks.picker.actions.toggle_preview(picker)
 ### `Snacks.picker.actions.yank()`
 
 ```lua
-Snacks.picker.actions.yank(_, item)
+Snacks.picker.actions.yank(picker, item, action)
 ```
+
+
 
 ## 📦 `snacks.picker.core.picker`
 
@@ -2547,7 +2764,7 @@ local M = {}
 ### `Snacks.picker.picker.get()`
 
 ```lua
----@param opts? {source?: string}
+---@param opts? {source?: string, tab?: boolean}
 Snacks.picker.picker.get(opts)
 ```
 
@@ -2583,6 +2800,13 @@ Get the current item at the cursor
 ```lua
 ---@param opts? {resolve?: boolean} default is `true`
 picker:current(opts)
+```
+
+### `picker:current_win()`
+
+```lua
+---@return string? name, snacks.win? win
+picker:current_win()
 ```
 
 ### `picker:cwd()`
@@ -2625,6 +2849,17 @@ based on the current pattern and search string.
 ```lua
 ---@param opts? { on_done?: fun(), refresh?: boolean }
 picker:find(opts)
+```
+
+### `picker:focus()`
+
+Focuses the given or configured window.
+Falls back to the first available window if the window is hidden.
+
+```lua
+---@param win? "input"|"list"|"preview"
+---@param opts? {show?: boolean} when enable is true, the window will be shown if hidden
+picker:focus(win, opts)
 ```
 
 ### `picker:hist()`
@@ -2735,11 +2970,14 @@ otherwise throttle the preview.
 picker:show_preview()
 ```
 
-### `picker:toggle_preview()`
+### `picker:toggle()`
+
+Toggle the given window and optionally focus
 
 ```lua
----@param enable? boolean
-picker:toggle_preview(enable)
+---@param win "input"|"list"|"preview"
+---@param opts? {enable?: boolean, focus?: boolean|string}
+picker:toggle(win, opts)
 ```
 
 ### `picker:word()`
@@ -2749,5 +2987,3 @@ Get the word under the cursor or the current visual selection
 ```lua
 picker:word()
 ```
-
-

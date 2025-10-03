@@ -16,6 +16,7 @@
 ---@field matcher snacks.picker.Matcher matcher for formatting list items
 ---@field matcher_regex snacks.picker.Matcher matcher for formatting list items
 ---@field target? {cursor: number, top?: number}
+---@field visible snacks.picker.Item[]
 local M = {}
 M.__index = M
 
@@ -36,6 +37,8 @@ local SCROLL_WHEEL_DOWN = Snacks.util.keycode("<ScrollWheelDown>")
 
 ---@type table<number, snacks.picker.list>
 local lists = setmetatable({}, { __mode = "v" })
+
+local stats = { render = 0, render_full = 0 }
 
 -- track mouse scrolling
 vim.on_key(function(key, typed)
@@ -81,8 +84,11 @@ function M.new(picker)
       foldmethod = "manual",
       cursorline = false,
       winhighlight = Snacks.picker.highlight.winhl("SnacksPickerList", { CursorLine = "Visual" }),
+      linebreak = true,
+      breakindent = true,
     },
   })
+  self.visible = {}
   self.win = Snacks.win(win_opts)
   self.top, self.cursor = 1, 1
   self.items = {}
@@ -126,27 +132,34 @@ function M.new(picker)
     for win in pairs(vim.v.event) do
       if (tonumber(win) or -1) == self.win.win then
         vim.api.nvim_win_call(self.win.win, function()
-          vim.fn.winrestview({ topline = 1, leftcol = 0 })
+          vim.fn.winrestview({ topline = 1 })
         end)
       end
     end
   end)
 
+  local focused = false
   self.win:on({ "WinEnter", "WinLeave" }, function()
-    self:update_cursorline()
+    local f = vim.api.nvim_get_current_win() == self.win.win
+    if focused ~= f then
+      focused = f
+      self:update_cursorline()
+    end
   end)
 
   return self
 end
 
+--- View the list at the given cursor and top.
+--- These are the normalized values, so are unaffected by reverse.
 ---@param cursor number
 ---@param top? number
 ---@param render? boolean
 function M:view(cursor, top, render)
   if top then
-    self:scroll(top, true, false)
+    self:_scroll(top, true, false)
   end
-  self:move(cursor, true, render)
+  self:_move(cursor, true, render)
   if self.cursor < cursor then
     self.target = { cursor = cursor, top = top }
   else
@@ -156,9 +169,14 @@ end
 
 --- Sets the target cursor/top for the next render.
 --- Useful to keep the cursor/top, right before triggering a `find`.
+--- If an existing target is set, it will be kept, unless `opts.force` is set.
 ---@param cursor? number
 ---@param top? number
-function M:set_target(cursor, top)
+---@param opts? {force?: boolean}
+function M:set_target(cursor, top, opts)
+  if self.target and not (opts and opts.force) then
+    return
+  end
   self.target = { cursor = cursor or self.cursor, top = top or self.top }
 end
 
@@ -188,6 +206,7 @@ function M:on_show()
   Snacks.util.wo(self.win.win, { scrolloff = 0 })
   self.dirty = true
   self:update_cursorline()
+  self:update({ force = true })
 end
 
 function M:count()
@@ -207,7 +226,7 @@ function M:close()
 end
 
 function M:scrolloff()
-  local scrolloff = math.min(self.state.scrolloff, math.floor(self:height() / 2))
+  local scrolloff = math.min(self.state.scrolloff, math.floor((self:height() - 1) / 2))
   local offset = math.min(self.cursor, self:count() - self.cursor)
   return offset > scrolloff and scrolloff or 0
 end
@@ -278,7 +297,6 @@ function M:clear()
   self.topk:clear()
   self.top, self.cursor = 1, 1
   self.items = {}
-  self._current = nil
   self.dirty = true
   if next(self.items) == nil then
     return
@@ -298,20 +316,22 @@ end
 function M:add(item, sort)
   local idx = #self.items + 1
   self.items[idx] = item
+  -- if the visible items are less than the height, then we need to render
+  self.dirty = self.dirty or #self.visible < (self.state.height or 50)
   if sort ~= false then
     local added, prev = self.topk:add(item)
     if added then
+      -- check if item is before the last visible item
+      if not self.dirty and #self.visible > 0 then
+        self.dirty = self.topk.cmp(item, self.visible[#self.visible])
+      end
       item.match_topk = item.match_tick
-      self.dirty = true
+      if prev then
+        -- replace with previous item, since new item is now in topk
+        self.items[idx] = prev
+        prev.match_topk = nil
+      end
     end
-    if prev then
-      -- replace with previous item, since new item is now in topk
-      self.items[idx] = prev
-      prev.match_topk = nil
-    end
-  end
-  if not self.dirty then
-    self.dirty = idx >= self.top and idx <= self.top + (self.state.height or 50)
   end
 end
 
@@ -326,7 +346,7 @@ end
 ---@param idx number
 ---@return snacks.picker.Item?
 function M:get(idx)
-  return self.topk:get(idx) or self.items[idx] or self.picker.finder.items[idx]
+  return self.topk:get(idx) or self.items[idx]
 end
 
 function M:height()
@@ -344,9 +364,6 @@ function M:update(opts)
     end)
   end
   if self.paused and #self.items < self.state.height then
-    return
-  end
-  if not self.win:valid() then
     return
   end
   self:render()
@@ -515,33 +532,28 @@ function M:_render(item, row)
     extmark.row = nil
     extmark.field = nil
     local ok, err = pcall(vim.api.nvim_buf_set_extmark, self.win.buf, ns, row - 1, col, extmark)
-    if not ok then
-      Snacks.notify.error(
-        "Failed to set extmark. This should not happen. Please report.\n"
-          .. err
-          .. "\n```lua\n"
-          .. vim.inspect(extmark)
-          .. "\n```"
-      )
+    if not ok and self.picker.opts.debug.extmarks then
+      Snacks.notify.error("Failed to set extmark.\n" .. err .. "\n```lua\n" .. vim.inspect(extmark) .. "\n```")
     end
   end
 end
 
 function M:update_cursorline()
   if self.win:win_valid() then
-    ---@type vim.wo|{}
-    local wo = {
+    Snacks.util.wo(self.win.win, {
       cursorline = self:count() > 0,
-      winhighlight = self.win.opts.wo.winhighlight:gsub(
-        "CursorLine:.*CursorLine",
-        "CursorLine:" .. (self.picker:is_focused() and "SnacksPickerListCursorLine" or "CursorLine")
-      ),
-    }
-    Snacks.util.wo(self.win.win, wo)
+      winhighlight = Snacks.util.winhl(vim.wo[self.win.win].winhighlight, {
+        CursorLine = self.picker:is_focused() and "SnacksPickerListCursorLine" or "CursorLine",
+      }),
+    })
   end
 end
 
 function M:render()
+  if not self.win:valid() then
+    return
+  end
+  stats.render = stats.render + 1
   if self.target then
     self:view(self.target.cursor, self.target.top, false)
     if not self.picker:is_active() then
@@ -549,10 +561,12 @@ function M:render()
     end
   else
     self:move(0, false, false)
+    self:scroll(0, false, false)
   end
 
   local redraw = false
   if self.dirty then
+    stats.render_full = stats.render_full + 1
     local height = self:height()
     self.dirty = false
     vim.api.nvim_win_call(self.win.win, function()
@@ -575,9 +589,11 @@ function M:render()
       self.matcher_regex:init(search)
     end
 
+    self.visible = {}
     -- render items
     for i = self.top, math.min(self:count(), self.top + height - 1) do
       local item = assert(self:get(i), "item not found")
+      self.visible[i - self.top + 1] = item
       local row = self:idx2row(i)
       self:_render(item, row)
     end
@@ -598,6 +614,10 @@ function M:render()
     self.win:redraw()
   end
 
+  if self.target then
+    return
+  end
+
   -- check if current item changed
   local current = self:current()
   if self._current ~= current then
@@ -615,5 +635,13 @@ function M:render()
     end
   end
 end
+
+-- vim.uv.new_timer():start(
+--   500,
+--   500,
+--   vim.schedule_wrap(function()
+--     Snacks.notify(vim.inspect(stats), { ft = "lua", id = "list_stats" })
+--   end)
+-- )
 
 return M
